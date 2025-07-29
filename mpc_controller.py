@@ -5,8 +5,8 @@ from geometry_msgs.msg import Twist, Vector3
 import cvxpy as cp
 
 class MPCControllerNode(Node):
-    def _init_(self):
-        super()._init_('MPCControllerNode')
+    def __init__(self):
+        super().__init__('MPCControllerNode')
 
         self.deviation = 0.0          # Mevcut sapma (x ekseni)
         self.heading_error = 0.0
