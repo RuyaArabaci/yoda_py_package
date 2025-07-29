@@ -5,8 +5,10 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Bool
 from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge
+from geometry_msgs.msg import Vector3
 import cv2
 import numpy as np
+import time
 
 class LaneDetectionNode(Node):
     def __init__(self):
@@ -26,6 +28,8 @@ class LaneDetectionNode(Node):
         self.lane_status_publisher = self.create_publisher(Bool, '/yoda/lane_status', 10)
         self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
         
+        self.lane_deviation_publisher = self.create_publisher(Vector3, '/lane_deviation', 10)   #MPC için eklendi
+        
         self.subscription = self.create_subscription(Image, '/yoda/camera/image_raw', self.serit_callback, 10)
         
         # PID ve LowPass Filter parametreleri
@@ -35,6 +39,10 @@ class LaneDetectionNode(Node):
         self.previous_data = None
         self.final_image = None
         self.camera_center_x, self.camera_center_y = self.find_camera_center(self.image_width, self.image_height)
+
+        self.last_time = time.time()                        #MPC için eklendi
+        self.fps_limit = 10  # Saniyede en fazla 10 işlem   #MPC için eklendi
+
 
     def find_camera_center(self, image_width, image_height):
         camera_center_x = image_width / 2
@@ -196,8 +204,39 @@ class LaneDetectionNode(Node):
         deviation = pts_mean_x - image_center_x
         control_signal = self.pid_controller.compute(deviation)
         filtered_control_signal = self.low_pass_filter.apply(control_signal)
-        
+
+        # Twist mesajı oluştur
         speed = Twist()
+
+    #MPC için eklendi----------------------------------------------
+        # Linear velocity
+        speed.linear.x = float(max_linear_speed)
+        speed.linear.y = 0.0
+        speed.linear.z = 0.0
+
+        # Angular velocity
+        angular_z = float(filtered_control_signal / 100.0)  # ölçekleme
+        angular_z = max(min(angular_z, max_angular_speed), -max_angular_speed)
+
+        speed.angular.x = 0.0
+        speed.angular.y = 0.0
+        speed.angular.z = angular_z
+
+        # Yorum satırı ise aktif hale getir:
+        self.publisher.publish(speed)
+        
+        # Yön hatasını hesapla (eğim farkı)
+        if len(mean_x) >= 2:
+            heading_error = np.arctan2(mean_x[-1] - mean_x[0], ploty[-1] - ploty[0])
+        else:
+            heading_error = 0.0  # Eğer eğim hesabı yapılamazsa 0 varsay
+
+        msg = Vector3()
+        msg.x = float(deviation)
+        msg.y = float(heading_error)     # Yön hatası 
+        self.lane_deviation_publisher.publish(msg)
+    # MPC için eklendi--------------------------------------------
+
         if filtered_control_signal < -1:
             direction = "Left"
             amount = abs(filtered_control_signal) / 4
@@ -214,8 +253,8 @@ class LaneDetectionNode(Node):
             speed.linear.x = max_linear_speed
         else:
             direction = "Straight"
-            speed.angular.z = 0
-            speed.linear.x = max_linear_speed
+            speed.angular.z = 0.0
+            speed.linear.x = float(max_linear_speed)
 
         self.get_logger().info(f"Filtered Control Signal: {filtered_control_signal}")
         self.get_logger().info(f"Direction: {direction}")
@@ -226,9 +265,21 @@ class LaneDetectionNode(Node):
         cv2.fillPoly(color_warp, np.int_([pts_mean]), (0, 255, 255))
         newwarp = cv2.warpPerspective(color_warp, Minv, (original_image.shape[1], original_image.shape[0]))
         result = cv2.addWeighted(original_image, 1, newwarp, 0.3, 0)
+        
+    #MPC için eklendi---------------
+        # Yön hatası hesapla (başlangıç ve bitiş noktalarının x farkından)
+        heading_error = np.arctan2(mean_x[-1] - mean_x[0], ploty[-1] - ploty[0])
+
         return result
 
     def serit_callback(self, data):
+
+        # FPS sınırlayıcı: çok hızlı çalışıyorsa atla
+        current_time = time.time()
+        if current_time - self.last_time < 1.0 / self.fps_limit:
+            return
+        self.last_time = current_time
+    #MPC için eklendi----------------
         try:
             frame = self.bridge.imgmsg_to_cv2(data, "bgr8")
             cv2.imshow("orijinal", cv2.resize(frame, (720, 640)))
