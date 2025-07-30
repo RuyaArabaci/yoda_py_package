@@ -12,7 +12,7 @@ class MPCControllerNode(Node):
         self.heading_error = 0.0
         self.dt = 0.1                 # Zaman adımı (saniye)
         self.N = 10                   # Tahmin ufku (adım sayısı)
-        self.v_const = 0.05           # Sabit doğrusal hız (m/s)
+        self.v_const = 0.8           # Sabit doğrusal hız (m/s)
         self.max_angular = 0.5        # Maksimum direksiyon açısı (rad/s)
         self.lambda_weight = 1.0      # Kontrol çabası ağırlığı
         self.current_heading_error = 0.0
@@ -24,6 +24,15 @@ class MPCControllerNode(Node):
 
         # Kontrol döngüsü her 100 ms'de bir çalışır
         self.timer = self.create_timer(self.dt, self.mpc_control_loop)
+
+        self.publish_initial_velocity()
+
+    def publish_initial_velocity(self):
+        cmd = Twist()
+        cmd.linear.x = 0.65  # Başlangıç doğrusal hız
+        cmd.angular.z = 0.0
+        self.publisher.publish(cmd)
+        self.get_logger().info("Başlangıç hızı yayınlandı 🚀")
 
     def deviation_callback(self, msg):
         self.deviation = msg.x
@@ -60,7 +69,7 @@ class MPCControllerNode(Node):
 
         # Twist mesajı oluştur
         cmd = Twist()
-        cmd.linear.x = self.v_const
+        cmd.linear.x = max(0.65 - 0.3 * abs(w_opt), 0.5)
         cmd.angular.z = float(w_opt)  # Kamera yönüne göre işaret terslenebilir
         self.publisher.publish(cmd)
 
@@ -74,5 +83,5 @@ def main(args=None):
     node.destroy_node()
     rclpy.shutdown()
 
-if __name__ == '_main_':
+if __name__ == '__main__':
     main()
